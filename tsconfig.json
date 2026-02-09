@@ -29,6 +29,6 @@
 		"src/**/*.ts",
 		"src/*.ts",
 		"src/**/*.svelte"
-	]
+, "src/ui/searchBar.svelte.org"	]
 	
 }

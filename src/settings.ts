@@ -55,20 +55,22 @@ export interface HomeTabSettings extends ObjectKeys{
     closePreviousSessionTabs: boolean
     omnisearch: boolean
     showOmnisearchExcerpt: boolean
+    showCreateNoteButton: boolean
+    createNoteDefaultFolder: string
 }
 
 export const DEFAULT_SETTINGS: HomeTabSettings = {
     logoType: 'default',
     logo: {
-        lucideIcon: '', 
-        imagePath: '', 
+        lucideIcon: '',
+        imagePath: '',
         imageLink: '',},
     logoScale: 1.2,
     iconColorType: 'default',
     wordmark: 'Obsidian',
     customFont: 'interfaceFont',
     fontSize: '4em',
-    fontColorType: 'default', 
+    fontColorType: 'default',
     fontWeight: 600,
     maxResults: 5,
     showbookmarkedFiles: app.internalPlugins.getPluginById('bookmarks') ? true : false,
@@ -88,6 +90,8 @@ export const DEFAULT_SETTINGS: HomeTabSettings = {
     closePreviousSessionTabs: false,
     omnisearch: false,
     showOmnisearchExcerpt: true,
+    showCreateNoteButton: false,
+    createNoteDefaultFolder: '',
 }
 
 
@@ -103,7 +107,7 @@ export class HomeTabSettingTab extends PluginSettingTab{
         const {containerEl} = this
         containerEl.empty()
 
-		containerEl.createEl('h3', {text: 'New tab settings'});
+		containerEl.createEl('h3', {text: 'New-tab settings'});
 
         containerEl.createEl('h2', {text: 'General settings'});
         new Setting(containerEl)
@@ -126,6 +130,26 @@ export class HomeTabSettingTab extends PluginSettingTab{
                 .addToggle(toggle => toggle
                     .setValue(this.plugin.settings.closePreviousSessionTabs)
                     .onChange(value => {this.plugin.settings.closePreviousSessionTabs = value; this.plugin.saveSettings()}))
+        }
+
+        new Setting(containerEl)
+            .setName('Show create new note button')
+            .setDesc('Displays a button to create a new note above the search bar.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.showCreateNoteButton)
+                .onChange(value => {this.plugin.settings.showCreateNoteButton = value; this.plugin.saveSettings(); this.display()}))
+
+        if(this.plugin.settings.showCreateNoteButton){
+            new Setting(containerEl)
+                .setName('Default folder for new notes')
+                .setDesc('Leave empty to use the vault root or default location from Obsidian settings.')
+                .addText(text => text
+                    .setPlaceholder('folder/subfolder')
+                    .setValue(this.plugin.settings.createNoteDefaultFolder)
+                    .onChange(value => {
+                        this.plugin.settings.createNoteDefaultFolder = value
+                        this.plugin.saveSettings()
+                    }))
         }
 
 		containerEl.createEl('h2', {text: 'Search settings'});

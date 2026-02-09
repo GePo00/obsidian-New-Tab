@@ -2,7 +2,7 @@
     import SearchBar from './searchBar.svelte';
     import type { HomeTabSettings } from 'src/settings';
     import { pluginSettingsStore, recentFiles, bookmarkedFiles } from '../store'
-    import { getIcon, View } from 'obsidian'
+    import { getIcon, View, Notice, normalizePath, TFolder, MarkdownView } from 'obsidian'
     import type { EmbeddedHomeTab } from '../homeView';
     import type HomeTabSearchBar from 'src/homeTabSearchbar';
 	import type { recentFile } from 'src/recentFiles';
@@ -10,18 +10,28 @@
 	import RecentFiles from './recentFiles.svelte';
 	import type { bookmarkedFile } from 'src/bookmarkedFiles';
 	import type HomeTab from 'src/main';
-    
+    import { CreateNoteModal } from 'src/createNoteModal';
+
     export let view: View
     export let HomeTabSearchBar: HomeTabSearchBar
     export let plugin: HomeTab
     export let embeddedView: EmbeddedHomeTab | undefined = undefined
 
-    // Get app from view to avoid global reference issues
-    const app = view.app
-
     // let viewType: 'embed' | 'standalone' = view instanceof HomeTabView ? 'standalone' : 'embed'
     let bookmarkedFileList: bookmarkedFile[] = []
+    let pluginSettings: HomeTabSettings
     let recentFileList: recentFile[] = []
+
+    pluginSettingsStore.subscribe((settings) => {
+        pluginSettings = settings
+
+        if(pluginSettings.showbookmarkedFiles){
+            bookmarkedFiles.subscribe((files) => bookmarkedFileList = files)
+        }
+        if(pluginSettings.showRecentFiles){
+            recentFiles.subscribe((files) => recentFileList = files)
+        }
+    })
 
     // Use Svelte's reactive $ syntax for automatic subscription
     $: pluginSettings = $pluginSettingsStore
@@ -41,6 +51,55 @@
     // Make these reactive to handle pluginSettings being undefined initially
     $: renderRecentFiles = embeddedView ? embeddedView.recentFiles : pluginSettings?.showRecentFiles ?? false
     $: renderbookmarkedFiles = embeddedView ? embeddedView.bookmarkedFiles : pluginSettings?.showbookmarkedFiles ?? false
+
+    // Function to create a new note
+    async function createNewNote() {
+        const defaultFolder = pluginSettings?.createNoteDefaultFolder || ''
+        new CreateNoteModal(app, defaultFolder, async (noteName: string, folder: TFolder | null) => {
+            try {
+                // Build the full path
+                let filePath = noteName
+                if (!filePath.endsWith('.md')) {
+                    filePath += '.md'
+                }
+
+                if (folder && folder.path !== '/') {
+                    filePath = normalizePath(`${folder.path}/${filePath}`)
+                } else {
+                    filePath = normalizePath(filePath)
+                }
+
+                // Check if file already exists
+                const existingFile = app.vault.getAbstractFileByPath(filePath)
+                if (existingFile) {
+                    new Notice(`File "${filePath}" already exists`)
+                    return
+                }
+
+                // Create the file
+                const file = await app.vault.create(filePath, '')
+
+                // Open the file in a new tab in edit mode
+                const newLeaf = app.workspace.getLeaf('tab')
+                await newLeaf.openFile(file)
+
+                // Switch to edit mode
+                const view = newLeaf.view
+                if (view instanceof MarkdownView) {
+                    const state = view.getState()
+                    await view.setState({
+                        ...state,
+                        mode: 'source'
+                    }, { history: false })
+                }
+
+                new Notice(`Created "${filePath}"`)
+            } catch (error) {
+                console.error('Error creating note:', error)
+                new Notice(`Failed to create note: ${error.message}`)
+            }
+        }).open()
+    }
 </script>
   
 <main class="home-tab" class:embedded={embeddedView}>
@@ -154,7 +213,15 @@
             </div>
         </div>
     {/if}
-    
+
+    {#if pluginSettings?.showCreateNoteButton}
+        <div class="new-note-button-container">
+            <button class="new-note-button" on:click={createNewNote}>
+                Create New Note
+            </button>
+        </div>
+    {/if}
+
     <SearchBar {HomeTabSearchBar} embedded={embeddedView ? true : false}/>
 
     {#if isbookmarkedPluginEnabled && bookmarkedFileList && renderbookmarkedFiles}
@@ -198,5 +265,31 @@
         .home-tab:not(.embedded) .home-tab-wordmark-container{
             padding-top: 10px;
         }
+    }
+
+    .new-note-button-container {
+        display: flex;
+        justify-content: center;
+        margin-bottom: 20px;
+    }
+
+    .new-note-button {
+        padding: 10px 20px;
+        background-color: var(--interactive-accent);
+        color: var(--text-on-accent);
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+        transition: opacity 0.2s;
+    }
+
+    .new-note-button:hover {
+        opacity: 0.8;
+    }
+
+    .new-note-button:active {
+        opacity: 0.6;
     }
 </style>
