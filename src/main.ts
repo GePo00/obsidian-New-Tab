@@ -1,99 +1,176 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
+import { MarkdownView, Plugin, WorkspaceLeaf } from 'obsidian';
+import { EmbeddedHomeTab, HomeTabView, VIEW_TYPE } from 'src/homeView';
+import { HomeTabSettingTab, DEFAULT_SETTINGS, type HomeTabSettings } from './settings'
+import { pluginSettingsStore, bookmarkedFiles } from './store'
+import { RecentFileManager } from './recentFiles';
+import { bookmarkedFilesManager } from './bookmarkedFiles';
 
-// Remember to rename these classes and interfaces!
-
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
-
-	async onload() {
-		await this.loadSettings();
-
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
-
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				editor.replaceSelection('Sample editor command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			}
-		});
-
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-
+declare module 'obsidian'{
+	interface App{
+		internalPlugins: InternalPlugins
+		plugins: Plugins
+		dom: any
+		isMobile: boolean
 	}
-
-	onunload() {
+	interface InternalPlugins{
+		getPluginById: Function
+		plugins: {
+			bookmarks: BookmarksPlugin
+		}
 	}
-
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MyPluginSettings>);
+	interface Plugins{
+		getPlugin: (id: string) => Plugin_2
 	}
-
-	async saveSettings() {
-		await this.saveData(this.settings);
+	interface BookmarksPlugin extends Plugin_2{
+		instance: {
+			items: BookmarkItem[]
+			getBookmarks: () => BookmarkItem[]
+			removeItem: (item: BookmarkItem) => void
+		}
+	}
+	interface BookmarkItem{
+		type: string,
+		title: string | undefined,
+		path: string
+	}
+	interface config{
+		nativeMenus: boolean
+	}
+	interface Vault{
+		config: config
+	}
+	interface Workspace{
+		createLeafInTabGroup: Function
+	}
+	interface WorkspaceLeaf{
+		rebuildView: Function
+		parent: WorkspaceSplit
+		activeTime: number
+		app: App
+	}
+	interface WorkspaceSplit{
+		children: WorkspaceLeaf[]
+	}
+	interface TFile{
+		deleted: boolean
 	}
 }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
+export default class HomeTab extends Plugin {
+	settings: HomeTabSettings;
+	recentFileManager: RecentFileManager
+	bookmarkedFileManager: bookmarkedFilesManager
+	activeEmbeddedHomeTabViews: EmbeddedHomeTab[]
+	
+	async onload() {
+		console.log('Loading new-tab plugin')
+		
+		await this.loadSettings();
+		this.addSettingTab(new HomeTabSettingTab(this.app, this))
+		this.registerView(VIEW_TYPE, (leaf) => new HomeTabView(leaf, this));		
+
+		// Replace new tabs with home tab view
+		this.registerEvent(this.app.workspace.on('layout-change', () => this.onLayoutChange()))
+		// Refocus search bar on leaf change
+		this.registerEvent(this.app.workspace.on('active-leaf-change', (leaf: WorkspaceLeaf) => {if(leaf.view instanceof HomeTabView){leaf.view.searchBar.focusSearchbar()}}))
+
+		pluginSettingsStore.set(this.settings) // Store the settings for the svelte components
+
+		this.activeEmbeddedHomeTabViews = []
+
+		this.recentFileManager = new RecentFileManager(app, this)
+		this.recentFileManager.load()
+
+		this.addCommand({
+			id: 'open-new-home-tab',
+			name: 'Open new tab',
+			callback: () => this.activateView(false, true)})
+		this.addCommand({
+			id: 'open-new-tab',
+			name: 'Replace current tab',
+			callback: () => this.activateView(true)})
+
+		// Wait for all plugins to load before check if the bookmarked plugin is enabled
+		this.app.workspace.onLayoutReady(() => {
+			if(this.app.internalPlugins.getPluginById('bookmarks')){
+				this.bookmarkedFileManager = new bookmarkedFilesManager(app, this, bookmarkedFiles)
+				this.bookmarkedFileManager.load()
+			}
+
+			this.registerMarkdownCodeBlockProcessor('search-bar', (source, el, ctx) => {
+				const view = this.app.workspace.getActiveViewOfType(MarkdownView)
+				if(view){
+					let embeddedHomeTab = new EmbeddedHomeTab(el, view, this, source)
+					this.activeEmbeddedHomeTabViews.push(embeddedHomeTab)
+					ctx.addChild(embeddedHomeTab)
+				}
+			})
+
+			if(this.settings.newTabOnStart){
+				// If an Home tab leaf is already open focus it
+				const leaves = app.workspace.getLeavesOfType(VIEW_TYPE)
+				if(leaves.length > 0){
+					app.workspace.revealLeaf(leaves[0])
+					// If more than one home tab leaf is open close them
+					leaves.forEach((leaf, index) => {
+						if(index < 1) return
+						leaf.detach()
+					})
+				}
+				else{
+					this.activateView(false, true)
+				}
+				// Close all other open leaves
+				if(this.settings.closePreviousSessionTabs){
+					// Get open leaves type
+					const leafTypes: string[] = []
+					app.workspace.iterateRootLeaves((leaf) => {
+						const leafType = leaf.view.getViewType()
+						if(leafTypes.indexOf(leafType) === -1 && leafType != VIEW_TYPE){
+							leafTypes.push(leafType)
+						}
+					})
+					leafTypes.forEach((type) => app.workspace.detachLeavesOfType(type))
+				}
+			}
+		})
 	}
 
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
+	onunload(): void {
+		this.app.workspace.detachLeavesOfType(VIEW_TYPE)
+		this.activeEmbeddedHomeTabViews.forEach(view => view.unload())
+		this.recentFileManager.unload()
+		this.bookmarkedFileManager.unload()
 	}
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
+	async loadSettings(): Promise<void> {
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData())
+	}
+
+	async saveSettings(): Promise<void> {
+		await this.saveData(this.settings)
+		pluginSettingsStore.update(() => this.settings)
+	}
+
+	private onLayoutChange(): void{
+		if(this.settings.replaceNewTabs){
+			this.activateView()
+		}
+	}
+
+	public activateView(overrideView?: boolean, openNewTab?: boolean):void {
+		const leaf = openNewTab ? app.workspace.getLeaf('tab') : app.workspace.getMostRecentLeaf()
+		// const leaf = newTab ? app.workspace.getLeaf() : app.workspace.getMostRecentLeaf()
+		if(leaf && (overrideView || leaf.getViewState().type === 'empty')){
+			leaf.setViewState({
+				type: VIEW_TYPE,
+			})
+			// Focus newly opened tab
+			if(openNewTab){app.workspace.revealLeaf(leaf)}
+		}
+	}
+
+	public refreshOpenViews(): void {
+		this.app.workspace.getLeavesOfType(VIEW_TYPE).forEach((leaf) => leaf.rebuildView())
 	}
 }

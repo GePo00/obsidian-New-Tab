@@ -1,6 +1,40 @@
 import esbuild from "esbuild";
 import process from "process";
 import { builtinModules } from 'node:module';
+import esbuildSvelte from "esbuild-svelte";
+import sveltePreprocess from "svelte-preprocess";
+import path from "path";
+import { fileURLToPath } from 'url';
+import fs from 'fs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Custom plugin to resolve src/ paths
+const srcPathResolverPlugin = {
+	name: 'src-path-resolver',
+	setup(build) {
+		build.onResolve({ filter: /^src\// }, args => {
+			const resolvedPath = path.join(__dirname, args.path);
+
+			// Try with different extensions
+			const extensions = ['', '.ts', '.js', '.svelte'];
+			for (const ext of extensions) {
+				const fullPath = resolvedPath + ext;
+				if (fs.existsSync(fullPath)) {
+					return { path: fullPath };
+				}
+			}
+
+			return null;
+		});
+
+		// Replace font-list with browser-compatible shim
+		build.onResolve({ filter: /^font-list$/ }, args => {
+			return { path: path.join(__dirname, 'src', 'font-list-shim.ts') };
+		});
+	},
+};
 
 const banner =
 `/*
@@ -11,12 +45,13 @@ if you want to view the source, please visit the github repository of this plugi
 
 const prod = (process.argv[2] === "production");
 
-const context = await esbuild.context({
+esbuild.build({
 	banner: {
 		js: banner,
 	},
 	entryPoints: ["src/main.ts"],
 	bundle: true,
+	watch: !prod,
 	external: [
 		"obsidian",
 		"electron",
@@ -35,15 +70,20 @@ const context = await esbuild.context({
 	format: "cjs",
 	target: "es2018",
 	logLevel: "info",
-	sourcemap: prod ? false : "inline",
+	sourcemap: "inline",
 	treeShaking: true,
 	outfile: "main.js",
-	minify: prod,
-});
-
-if (prod) {
-	await context.rebuild();
-	process.exit(0);
-} else {
-	await context.watch();
-}
+	minify: false,
+	plugins: [
+		srcPathResolverPlugin,
+		esbuildSvelte({
+			preprocess: sveltePreprocess(),
+			compilerOptions: {
+				dev: !prod,
+				generate: 'dom',
+				hydratable: false,
+				css: 'injected',
+			},
+		}),
+	],
+}).catch(() => process.exit(1));
